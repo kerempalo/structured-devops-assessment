@@ -1,0 +1,59 @@
+name: Structured DevOps Assignment Pipeline
+on:
+  workflow_dispatch:
+env:
+  S3_BUCKET_NAME: terraform-remote-state-bucket-188721
+  S3_BUCKET_REGION: ${{ secrets.AWS_REGION }}
+  REMOTE_BACKEND_KEY: terraform-remote-state
+  DYNAMODB_TABLE_NAME: terraform-remote-state-lock
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+  TF_ACTIONS_WORKING_DIR: 'terraform'
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install AWS CLI
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        pip3 install awscli
+    - name: Configure AWS Credentials
+      run: |
+        aws configure set aws_access_key_id ${{ env.AWS_ACCESS_KEY_ID }}
+        aws configure set aws_secret_access_key ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws configure set aws_session_token ${{ env.AWS_SESSION_TOKEN }}
+        aws configure set default.region ${{ env.AWS_REGION }}
+    - name: Create Terraform Remote Backend (If Not Exists)
+      id: create_remote_backend
+      run: |
+        aws s3api head-bucket --bucket ${{ env.S3_BUCKET_NAME }} --region ${{ env.S3_BUCKET_REGION }} || aws s3api create-bucket --bucket  ${{ env.S3_BUCKET_NAME }} --create-bucket-configuration LocationConstraint=${{ env.S3_BUCKET_REGION }}
+    - name: Create Terraform Remote Backend Lock (If Not Exists)
+      id: create_remote_backend_lock
+      run: |
+        aws dynamodb describe-table --table-name ${{ env.DYNAMODB_TABLE_NAME }} --region ${{ env.S3_BUCKET_REGION }} || aws dynamodb create-table --table-name ${{ env.DYNAMODB_TABLE_NAME }} --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+    - name: Get code
+      uses: actions/checkout@v4
+    - uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.1.7"
+    - name: Terraform Init
+      id: init
+      working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+      run: terraform init
+    - name: Terraform Validate
+      id: validate
+      working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+      run: terraform validate -no-color
+    - name: Terraform Plan
+      id: plan
+      working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+      run: terraform plan -var "aws_region=${{ env.AWS_REGION }}" -var "ssh_public_key=${{ env.SSH_PUBLIC_KEY }}" -no-color
+    - name: Terraform Apply
+      id: apply
+      working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+      run: terraform apply -auto-approve -var "aws_region=${{ env.AWS_REGION }}" -var "ssh_public_key=${{ env.SSH_PUBLIC_KEY }}" -no-color
